@@ -2230,7 +2230,6 @@ behavioral_stmt:
 	non_opt_delay behavioral_stmt |
 	simple_behavioral_stmt ';' |
 	attr ';' {
-		log_file_warning(current_filename, get_line_num(), "Attribute(s) attached to null statement. Ignoring.\n");
 		free_attr($1);
 	} |
 	hierarchical_id attr {
@@ -2536,7 +2535,6 @@ module_gen_body:
 gen_stmt_or_module_body_stmt:
 	gen_stmt | module_body_stmt |
 	attr ';' {
-		log_file_warning(current_filename, get_line_num(), "Attribute(s) attached to null statement. Ignoring.\n");
 		free_attr($1);
 	};
 
