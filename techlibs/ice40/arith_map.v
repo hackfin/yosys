@@ -35,8 +35,16 @@ module _80_ice40_alu (A, B, CI, BI, X, Y, CO);
 	wire _TECHMAP_FAIL_ = Y_WIDTH <= 2;
 
 	wire [Y_WIDTH-1:0] A_buf, B_buf;
-	\$pos #(.A_SIGNED(A_SIGNED), .A_WIDTH(A_WIDTH), .Y_WIDTH(Y_WIDTH)) A_conv (.A(A), .Y(A_buf));
-	\$pos #(.A_SIGNED(B_SIGNED), .A_WIDTH(B_WIDTH), .Y_WIDTH(Y_WIDTH)) B_conv (.A(B), .Y(B_buf));
+	generate if (A_WIDTH != 0)
+		\$pos #(.A_SIGNED(A_SIGNED), .A_WIDTH(A_WIDTH), .Y_WIDTH(Y_WIDTH)) A_conv (.A(A), .Y(A_buf));
+	else
+		\$pos #(.A_SIGNED(A_SIGNED), .A_WIDTH(A_WIDTH), .Y_WIDTH(Y_WIDTH)) A_conv (.A(), .Y(A_buf));
+	endgenerate
+	generate if (B_WIDTH != 0)
+		\$pos #(.A_SIGNED(B_SIGNED), .A_WIDTH(B_WIDTH), .Y_WIDTH(Y_WIDTH)) B_conv (.A(B), .Y(B_buf));
+	else
+		\$pos #(.A_SIGNED(B_SIGNED), .A_WIDTH(B_WIDTH), .Y_WIDTH(Y_WIDTH)) B_conv (.A(), .Y(B_buf));
+	endgenerate
 
 	wire [Y_WIDTH-1:0] AA = A_buf;
 	wire [Y_WIDTH-1:0] BB = BI ? ~B_buf : B_buf;
