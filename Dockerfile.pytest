@@ -1,52 +1,23 @@
-ARG IMAGE="python:3-slim-buster"
+# Buster slim gcc-8 docker file to build yosys
+FROM debian:buster-slim
 
-#---
+RUN apt-get update --allow-releaseinfo-change ; \
+	apt-get install -y \
+	zlib1g-dev pkg-config \
+	git python3-dev \
+	libboost-dev libboost-filesystem-dev libboost-thread-dev \
+	libboost-program-options-dev libboost-python-dev libboost-iostreams-dev \
+	bison flex tcl-dev libreadline6-dev libffi-dev \
+	sudo
 
-FROM $IMAGE AS base
+RUN useradd -u 1000 -g 100 -m -s /bin/bash pyosys && \
+	adduser pyosys sudo && \
+	echo "pyosys ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/pyosys-nopw
 
-RUN apt-get update -qq \
- && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
-    ca-certificates \
-    clang \
-    curl \
-    libffi-dev \
-    libreadline-dev \
-    tcl-dev \
-    graphviz \
-    xdot \
- && apt-get autoclean && apt-get clean && apt-get -y autoremove \
- && update-ca-certificates \
- && rm -rf /var/lib/apt/lists
+COPY . /build
 
-#---
+RUN chown -R pyosys /build 
 
-FROM base AS build
-
-RUN apt-get update -qq \
- && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
-    bison \
-    flex \
-    gawk \
-    gcc \
-    git \
-    iverilog \
-    pkg-config \
- && apt-get autoclean && apt-get clean && apt-get -y autoremove \
- && rm -rf /var/lib/apt/lists
-
-COPY . /yosys
-
-ENV PREFIX /opt/yosys
-
-RUN cp /yosys/misc/recipes/pyosys-buster.mk /yosys/Makefile.conf && cd /yosys \
- && make \
- && make install
-
-#---
-
-ENV PATH /opt/yosys/bin:$PATH
-
-RUN useradd -m yosys
-USER yosys
-
-# CMD ["yosys"]
+USER pyosys
+RUN cd /build && cp misc/recipes/pyosys-buster.mk Makefile.conf && \
+	make && sudo make install
