@@ -62,6 +62,7 @@ COPY . $HOME/src
 
 RUN chown -R pyosys /home/pyosys/src
 
+COPY --from=builder /usr/lib/yosys /usr/lib/yosys
 COPY --from=builder /usr/bin/yosys* /usr/bin/
 COPY --from=builder /usr/lib/python3.7/dist-packages/pyosys \
 	/usr/lib/python3.7/dist-packages/pyosys
