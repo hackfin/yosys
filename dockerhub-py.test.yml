@@ -1,3 +1,3 @@
 sut: 
   build: .
-  command: cd /home/pyosys/src/tests/pyosys/ && ./run-test.sh
+  command: bash -c "cd /home/pyosys/src/tests/pyosys && sh ./run-test.sh"
