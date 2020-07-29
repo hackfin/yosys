@@ -235,7 +235,8 @@ struct SynthIntelALMPass : public ScriptPass {
 
 		if (!nobram && check_label("map_bram", "(skip if -nobram)")) {
 			run(stringf("memory_bram -rules +/intel_alm/common/bram_%s.txt", bram_type.c_str()));
-			run(stringf("techmap -map +/intel_alm/common/bram_%s_map.v", bram_type.c_str()));
+			if (help_mode || bram_type != "m10k")
+				run(stringf("techmap -map +/intel_alm/common/bram_%s_map.v", bram_type.c_str()));
 		}
 
 		if (!nolutram && check_label("map_lutram", "(skip if -nolutram)")) {
@@ -258,7 +259,7 @@ struct SynthIntelALMPass : public ScriptPass {
 
 		if (check_label("map_luts")) {
 			run("techmap -map +/intel_alm/common/abc9_map.v");
-			run(stringf("abc9 %s -maxlut 6 -W 200", help_mode ? "[-dff]" : dff ? "-dff" : ""));
+			run(stringf("abc9 %s -maxlut 6 -W 600", help_mode ? "[-dff]" : dff ? "-dff" : ""));
 			run("techmap -map +/intel_alm/common/abc9_unmap.v");
 			run("techmap -map +/intel_alm/common/alm_map.v");
 			run("opt -fast");

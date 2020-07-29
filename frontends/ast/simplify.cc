@@ -483,6 +483,27 @@ static AstNode *make_packed_struct(AstNode *template_node, std::string &name)
 	return wnode;
 }
 
+// check if a node or its children contains an assignment to the given variable
+static bool node_contains_assignment_to(const AstNode* node, const AstNode* var)
+{
+	if (node->type == AST_ASSIGN_EQ || node->type == AST_ASSIGN_LE) {
+		// current node is iteslf an assignment
+		log_assert(node->children.size() >= 2);
+		const AstNode* lhs = node->children[0];
+		if (lhs->type == AST_IDENTIFIER && lhs->str == var->str)
+			return false;
+	}
+	for (const AstNode* child : node->children) {
+		// if this child shadows the given variable
+		if (child != var && child->str == var->str && child->type == AST_WIRE)
+			break; // skip the remainder of this block/scope
+		// depth-first short circuit
+		if (!node_contains_assignment_to(child, var))
+			return false;
+	}
+	return true;
+}
+
 // convert the AST into a simpler AST that has all parameters substituted by their
 // values, unrolled for-loops, expanded generate blocks, etc. when this function
 // is done with an AST it can be converted into RTLIL using genRTLIL().
@@ -1687,25 +1708,27 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 				body_ast->children.size() == 1 && body_ast->children.at(0)->type == AST_GENBLOCK)
 			body_ast = body_ast->children.at(0);
 
-		if (init_ast->type != AST_ASSIGN_EQ)
-			log_file_error(filename, location.first_line, "Unsupported 1st expression of generate for-loop!\n");
-		if (next_ast->type != AST_ASSIGN_EQ)
-			log_file_error(filename, location.first_line, "Unsupported 3rd expression of generate for-loop!\n");
-
+		const char* loop_type_str = "procedural";
+		const char* var_type_str = "register";
+		AstNodeType var_type = AST_WIRE;
 		if (type == AST_GENFOR) {
-			if (init_ast->children[0]->id2ast == NULL || init_ast->children[0]->id2ast->type != AST_GENVAR)
-				log_file_error(filename, location.first_line, "Left hand side of 1st expression of generate for-loop is not a gen var!\n");
-			if (next_ast->children[0]->id2ast == NULL || next_ast->children[0]->id2ast->type != AST_GENVAR)
-				log_file_error(filename, location.first_line, "Left hand side of 3rd expression of generate for-loop is not a gen var!\n");
-		} else {
-			if (init_ast->children[0]->id2ast == NULL || init_ast->children[0]->id2ast->type != AST_WIRE)
-				log_file_error(filename, location.first_line, "Left hand side of 1st expression of generate for-loop is not a register!\n");
-			if (next_ast->children[0]->id2ast == NULL || next_ast->children[0]->id2ast->type != AST_WIRE)
-				log_file_error(filename, location.first_line, "Left hand side of 3rd expression of generate for-loop is not a register!\n");
+			loop_type_str = "generate";
+			var_type_str = "genvar";
+			var_type = AST_GENVAR;
 		}
 
+		if (init_ast->type != AST_ASSIGN_EQ)
+			log_file_error(filename, location.first_line, "Unsupported 1st expression of %s for-loop!\n", loop_type_str);
+		if (next_ast->type != AST_ASSIGN_EQ)
+			log_file_error(filename, location.first_line, "Unsupported 3rd expression of %s for-loop!\n", loop_type_str);
+
+		if (init_ast->children[0]->id2ast == NULL || init_ast->children[0]->id2ast->type != var_type)
+			log_file_error(filename, location.first_line, "Left hand side of 1st expression of %s for-loop is not a %s!\n", loop_type_str, var_type_str);
+		if (next_ast->children[0]->id2ast == NULL || next_ast->children[0]->id2ast->type != var_type)
+			log_file_error(filename, location.first_line, "Left hand side of 3rd expression of %s for-loop is not a %s!\n", loop_type_str, var_type_str);
+
 		if (init_ast->children[0]->id2ast != next_ast->children[0]->id2ast)
-			log_file_error(filename, location.first_line, "Incompatible left-hand sides in 1st and 3rd expression of generate for-loop!\n");
+			log_file_error(filename, location.first_line, "Incompatible left-hand sides in 1st and 3rd expression of %s for-loop!\n", loop_type_str);
 
 		// eval 1st expression
 		AstNode *varbuf = init_ast->children[1]->clone();
@@ -1717,7 +1740,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 		}
 
 		if (varbuf->type != AST_CONSTANT)
-			log_file_error(filename, location.first_line, "Right hand side of 1st expression of generate for-loop is not constant!\n");
+			log_file_error(filename, location.first_line, "Right hand side of 1st expression of %s for-loop is not constant!\n", loop_type_str);
 
 		auto resolved = current_scope.at(init_ast->children[0]->str);
 		if (resolved->range_valid) {
@@ -1758,7 +1781,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 			}
 
 			if (buf->type != AST_CONSTANT)
-				log_file_error(filename, location.first_line, "2nd expression of generate for-loop is not constant!\n");
+				log_file_error(filename, location.first_line, "2nd expression of %s for-loop is not constant!\n", loop_type_str);
 
 			if (buf->integer == 0) {
 				delete buf;
@@ -1804,7 +1827,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 			}
 
 			if (buf->type != AST_CONSTANT)
-				log_file_error(filename, location.first_line, "Right hand side of 3rd expression of generate for-loop is not constant (%s)!\n", type2str(buf->type).c_str());
+				log_file_error(filename, location.first_line, "Right hand side of 3rd expression of %s for-loop is not constant (%s)!\n", loop_type_str, type2str(buf->type).c_str());
 
 			delete varbuf->children[0];
 			varbuf->children[0] = buf;
@@ -3196,6 +3219,13 @@ skip_dynamic_range_lvalue_expansion:;
 				if ((child->is_input || child->is_output) && arg_count < children.size())
 				{
 					AstNode *arg = children[arg_count++]->clone();
+					// convert purely constant arguments into localparams
+					if (child->is_input && child->type == AST_WIRE && arg->type == AST_CONSTANT && node_contains_assignment_to(decl, child)) {
+						wire->type = AST_LOCALPARAM;
+						wire->attributes.erase(ID::nosync);
+						wire->children.insert(wire->children.begin(), arg->clone());
+						continue;
+					}
 					AstNode *wire_id = new AstNode(AST_IDENTIFIER);
 					wire_id->str = wire->str;
 					AstNode *assign = child->is_input ?
