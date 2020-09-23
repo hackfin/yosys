@@ -54,7 +54,7 @@ USING_YOSYS_NAMESPACE
 #  error "Only Symbiotic EDA flavored Verific is supported. Please contact office@symbioticeda.com for commercial support for Yosys+Verific."
 #endif
 
-#if SYMBIOTIC_VERIFIC_API_VERSION < 20200702
+#if SYMBIOTIC_VERIFIC_API_VERSION < 20200801
 #  error "Please update your version of Symbiotic EDA flavored Verific."
 #endif
 
@@ -199,12 +199,17 @@ void VerificImporter::import_attributes(dict<RTLIL::IdString, RTLIL::Const> &att
 				attributes.emplace(stringf("\\enum_value_%s", p+2), RTLIL::escape_id(k));
 			}
 			else if (nl->IsFromVhdl()) {
-				// Expect "<binary>"
+				// Expect "<binary>" or plain <binary>
 				auto p = v;
 				if (p) {
-					if (*p != '"')
-						p = nullptr;
-					else {
+					if (*p != '"') {
+						auto l = strlen(p);
+						auto q = (char*)malloc(l+1);
+						strncpy(q, p, l);
+						q[l] = '\0';
+						for(char *ptr = q; *ptr; ++ptr )*ptr = tolower(*ptr);
+						attributes.emplace(stringf("\\enum_value_%s", q), RTLIL::escape_id(k));
+					} else {
 						auto *q = p+1;
 						for (; *q != '"'; q++)
 							if (*q != '0' && *q != '1') {
@@ -213,16 +218,20 @@ void VerificImporter::import_attributes(dict<RTLIL::IdString, RTLIL::Const> &att
 							}
 						if (p && *(q+1) != '\0')
 							p = nullptr;
+
+						if (p != nullptr)
+						{
+							auto l = strlen(p);
+							auto q = (char*)malloc(l+1-2);
+							strncpy(q, p+1, l-2);
+							q[l-2] = '\0';
+							attributes.emplace(stringf("\\enum_value_%s", q), RTLIL::escape_id(k));
+							free(q);
+						}
 					}
 				}
 				if (p == nullptr)
-					log_error("Expected TypeRange value '%s' to be of form \"<binary>\".\n", v);
-				auto l = strlen(p);
-				auto q = (char*)malloc(l+1-2);
-				strncpy(q, p+1, l-2);
-				q[l-2] = '\0';
-				attributes.emplace(stringf("\\enum_value_%s", q), RTLIL::escape_id(k));
-				free(q);
+					log_error("Expected TypeRange value '%s' to be of form \"<binary>\" or <binary>.\n", v);
 			}
 		}
 	}
@@ -2466,7 +2475,7 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
-		if (args[argidx] == "-app" && argidx+1 < GetSize(args))
+		if (argidx+1 < GetSize(args) && args[argidx] == "-app")
 		{
 			VerificFormalApplications vfa;
 			auto apps = vfa.GetApps();
@@ -2510,7 +2519,7 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
-		if (args[argidx] == "-pp" && argidx < GetSize(args))
+		if (argidx < GetSize(args) && args[argidx] == "-pp")
 		{
 			const char* filename = nullptr;
 			const char* module = nullptr;
@@ -2552,7 +2561,7 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
-		if (args[argidx] == "-template" && argidx < GetSize(args))
+		if (argidx < GetSize(args) && args[argidx] == "-template")
 		{
 			if (!(argidx < GetSize(args)))
 				cmd_error(args, argidx, "No template type specified.\n");

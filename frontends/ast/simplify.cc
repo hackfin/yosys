@@ -110,6 +110,12 @@ std::string AstNode::process_format_str(const std::string &sformat, int next_arg
 						goto unsupported_format;
 					break;
 
+				case 'l':
+				case 'L':
+					if (got_len)
+						goto unsupported_format;
+					break;
+
 				default:
 				unsupported_format:
 					log_file_error(filename, location.first_line, "System task `%s' called with invalid/unsupported format specifier.\n", str.c_str());
@@ -152,6 +158,11 @@ std::string AstNode::process_format_str(const std::string &sformat, int next_arg
 
 				case 'm':
 				case 'M':
+					sout += log_id(current_module->name);
+					break;
+
+				case 'l':
+				case 'L':
 					sout += log_id(current_module->name);
 					break;
 
@@ -1512,7 +1523,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 
 		for (int i = 0; 2*i < GetSize(id2ast->multirange_dimensions); i++)
 		{
-			if (GetSize(children[0]->children) < i)
+			if (GetSize(children[0]->children) <= i)
 				log_file_error(filename, location.first_line, "Insufficient number of array indices for %s.\n", log_id(str));
 
 			AstNode *new_index_expr = children[0]->children[i]->children.at(0)->clone();
@@ -1597,6 +1608,13 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 	if (type == AST_IDENTIFIER) {
 		if (current_scope.count(str) == 0) {
 			AstNode *current_scope_ast = (current_ast_mod == nullptr) ? current_ast : current_ast_mod;
+			const std::string& mod_scope = current_scope_ast->str;
+			if (str[0] == '\\' && str.substr(0, mod_scope.size()) == mod_scope) {
+				std::string new_str = "\\" + str.substr(mod_scope.size() + 1);
+				if (current_scope.count(new_str)) {
+					str = new_str;
+				}
+			}
 			for (auto node : current_scope_ast->children) {
 				//log("looking at mod scope child %s\n", type2str(node->type).c_str());
 				switch (node->type) {
@@ -3211,14 +3229,15 @@ skip_dynamic_range_lvalue_expansion:;
 				if (wire_cache.count(child->str))
 				{
 					wire = wire_cache.at(child->str);
-					if (wire->children.empty()) {
+					bool contains_value = wire->type == AST_LOCALPARAM;
+					if (wire->children.size() == contains_value) {
 						for (auto c : child->children)
 							wire->children.push_back(c->clone());
 					} else if (!child->children.empty()) {
 						while (child->simplify(true, false, false, stage, -1, false, false)) { }
-						if (GetSize(child->children) == GetSize(wire->children)) {
+						if (GetSize(child->children) == GetSize(wire->children) - contains_value) {
 							for (int i = 0; i < GetSize(child->children); i++)
-								if (*child->children.at(i) != *wire->children.at(i))
+								if (*child->children.at(i) != *wire->children.at(i + contains_value))
 									goto tcall_incompatible_wires;
 						} else {
 					tcall_incompatible_wires:
@@ -4487,6 +4506,18 @@ AstNode *AstNode::eval_const_function(AstNode *fcall)
 		}
 
 		log_assert(variables.count(str) != 0);
+
+		if (stmt->type == AST_LOCALPARAM)
+		{
+			while (stmt->simplify(true, false, false, 1, -1, false, true)) { }
+
+			if (!backup_scope.count(stmt->str))
+				backup_scope[stmt->str] = current_scope[stmt->str];
+			current_scope[stmt->str] = stmt;
+
+			block->children.erase(block->children.begin());
+			continue;
+		}
 
 		if (stmt->type == AST_ASSIGN_EQ)
 		{
