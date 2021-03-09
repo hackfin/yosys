@@ -71,7 +71,7 @@ def test_changes():
 
 	for i, e in enumerate(reference):
 		d = dir(ys)
-		if e != d[i]:
+		if not e in d:
 			print(d)
-			raise ValueError("libyosys API has changed: %s != %s" % (e, d[i]))
+			raise ValueError("libyosys API has changed: missing: %s " % (e))
 
