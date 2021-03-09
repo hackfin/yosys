@@ -613,7 +613,8 @@ void RTLIL::Design::add(RTLIL::Module *module)
 
 RTLIL::Module *RTLIL::Design::addModule(RTLIL::IdString name)
 {
-	log_assert(modules_.count(name) == 0);
+	if (modules_.count(name) != 0)
+		log_error("Attempted to add new module named '%s', but a module by that name already exists\n", name.c_str());
 	log_assert(refcount_modules_ == 0);
 
 	RTLIL::Module *module = new RTLIL::Module;
@@ -1826,7 +1827,7 @@ void RTLIL::Module::remove(const pool<RTLIL::Wire*> &wires)
 			sig.pack();
 			for (auto &c : sig.chunks_)
 				if (c.wire != NULL && wires_p->count(c.wire)) {
-					c.wire = module->addWire(NEW_ID, c.width);
+					c.wire = module->addWire(stringf("$delete_wire$%d", autoidx++), c.width);
 					c.offset = 0;
 				}
 		}

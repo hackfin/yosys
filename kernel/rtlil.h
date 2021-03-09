@@ -334,6 +334,10 @@ namespace RTLIL
 			return compare(size()-len, len, suffix) == 0;
 		}
 
+		bool contains(const char* str) const {
+			return strstr(c_str(), str);
+		}
+
 		size_t size() const {
 			return strlen(c_str());
 		}
@@ -376,7 +380,7 @@ namespace RTLIL
 		bool in(const std::string &rhs) const { return *this == rhs; }
 		bool in(const pool<IdString> &rhs) const { return rhs.count(*this) != 0; }
 
-		bool isPublic() { return begins_with("\\"); }
+		bool isPublic() const { return begins_with("\\"); }
 	};
 
 	namespace ID {
@@ -731,6 +735,7 @@ struct RTLIL::SigChunk
 
 	RTLIL::SigChunk extract(int offset, int length) const;
 	inline int size() const { return width; }
+	inline bool is_wire() const { return wire != NULL; }
 
 	bool operator <(const RTLIL::SigChunk &other) const;
 	bool operator ==(const RTLIL::SigChunk &other) const;
@@ -755,6 +760,8 @@ struct RTLIL::SigBit
 	SigBit(const RTLIL::SigSpec &sig);
 	SigBit(const RTLIL::SigBit &sigbit) = default;
 	RTLIL::SigBit &operator =(const RTLIL::SigBit &other) = default;
+
+	inline bool is_wire() const { return wire != NULL; }
 
 	bool operator <(const RTLIL::SigBit &other) const;
 	bool operator ==(const RTLIL::SigBit &other) const;
@@ -1332,7 +1339,6 @@ public:
 
 	RTLIL::SigSpec Not (RTLIL::IdString name, const RTLIL::SigSpec &sig_a, bool is_signed = false, const std::string &src = "");
 	RTLIL::SigSpec Pos (RTLIL::IdString name, const RTLIL::SigSpec &sig_a, bool is_signed = false, const std::string &src = "");
-	RTLIL::SigSpec Bu0 (RTLIL::IdString name, const RTLIL::SigSpec &sig_a, bool is_signed = false, const std::string &src = "");
 	RTLIL::SigSpec Neg (RTLIL::IdString name, const RTLIL::SigSpec &sig_a, bool is_signed = false, const std::string &src = "");
 
 	RTLIL::SigSpec And  (RTLIL::IdString name, const RTLIL::SigSpec &sig_a, const RTLIL::SigSpec &sig_b, bool is_signed = false, const std::string &src = "");
@@ -1513,7 +1519,6 @@ struct RTLIL::CaseRule : public RTLIL::AttrObject
 	std::vector<RTLIL::SwitchRule*> switches;
 
 	~CaseRule();
-	void optimize();
 
 	bool empty() const;
 

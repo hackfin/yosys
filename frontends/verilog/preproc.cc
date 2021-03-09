@@ -321,7 +321,6 @@ struct define_body_t
 define_map_t::define_map_t()
 {
 	add("YOSYS", "1");
-	add(formal_mode ? "FORMAL" : "SYNTHESIS", "1");
 }
 
 // We must define this destructor here (rather than relying on the default), because we need to
@@ -391,13 +390,16 @@ static void input_file(std::istream &f, std::string filename)
 // the argument list); false if we finished with ','.
 static bool read_argument(std::string &dest)
 {
+	skip_spaces();
 	std::vector<char> openers;
 	for (;;) {
-		skip_spaces();
 		std::string tok = next_token(true);
 		if (tok == ")") {
-			if (openers.empty())
+			if (openers.empty()) {
+				while (dest.size() && (dest.back() == ' ' || dest.back() == '\t'))
+					dest = dest.substr(0, dest.size() - 1);
 				return true;
+			}
 			if (openers.back() != '(')
 				log_error("Mismatched brackets in macro argument: %c and %c.\n",
 				          openers.back(), tok[0]);
@@ -475,7 +477,16 @@ static bool try_expand_macro(define_map_t &defines, std::string &tok)
 	std::string name = tok.substr(1);
 	std::string skipped_spaces = skip_spaces();
 	tok = next_token(false);
-	if (tok == "(" && body->has_args) {
+	if (body->has_args) {
+		if (tok != "(") {
+			if (tok.size() == 1 && iscntrl(tok[0])) {
+				char buf[5];
+				snprintf(buf, sizeof(buf), "\\x%02x", tok[0]);
+				tok = buf;
+			}
+			log_error("Expected to find '(' to begin macro arguments for '%s', but instead found '%s'\n",
+				name.c_str(), tok.c_str());
+		}
 		std::vector<std::string> args;
 		bool done = false;
 		while (!done) {
@@ -716,7 +727,8 @@ frontend_verilog_preproc(std::istream                 &f,
 
 	std::vector<std::string> filename_stack;
 	int ifdef_fail_level = 0;
-	bool in_elseif = false;
+	int ifdef_pass_level = 0;
+	bool ifdef_already_satisfied = false;
 
 	output_code.clear();
 	input_buffer.clear();
@@ -732,42 +744,68 @@ frontend_verilog_preproc(std::istream                 &f,
 		if (tok == "`endif") {
 			if (ifdef_fail_level > 0)
 				ifdef_fail_level--;
-			if (ifdef_fail_level == 0)
-				in_elseif = false;
+			else if (ifdef_pass_level > 0)
+				ifdef_already_satisfied = --ifdef_pass_level;
+			else
+				log_error("Found %s outside of macro conditional branch!\n", tok.c_str());
 			continue;
 		}
 
 		if (tok == "`else") {
-			if (ifdef_fail_level == 0)
+			if (ifdef_fail_level == 0) {
+				if (ifdef_pass_level == 0)
+					log_error("Found %s outside of macro conditional branch!\n", tok.c_str());
+				log_assert(ifdef_already_satisfied);
 				ifdef_fail_level = 1;
-			else if (ifdef_fail_level == 1 && !in_elseif)
+			} else if (ifdef_fail_level == 1 && !ifdef_already_satisfied) {
 				ifdef_fail_level = 0;
+				ifdef_pass_level++;
+				ifdef_already_satisfied = true;
+			}
 			continue;
 		}
 
 		if (tok == "`elsif") {
 			skip_spaces();
 			std::string name = next_token(true);
-			if (ifdef_fail_level == 0)
-				ifdef_fail_level = 1, in_elseif = true;
-			else if (ifdef_fail_level == 1 && defines.find(name))
-				ifdef_fail_level = 0, in_elseif = true;
+			if (ifdef_fail_level == 0) {
+				if (ifdef_pass_level == 0)
+					log_error("Found %s outside of macro conditional branch!\n", tok.c_str());
+				log_assert(ifdef_already_satisfied);
+				ifdef_fail_level = 1;
+			} else if (ifdef_fail_level == 1 && !ifdef_already_satisfied && defines.find(name)) {
+				ifdef_fail_level = 0;
+				ifdef_pass_level++;
+				ifdef_already_satisfied = true;
+			}
 			continue;
 		}
 
 		if (tok == "`ifdef") {
 			skip_spaces();
 			std::string name = next_token(true);
-			if (ifdef_fail_level > 0 || !defines.find(name))
+			if (ifdef_fail_level > 0 || !defines.find(name)) {
 				ifdef_fail_level++;
+			} else {
+				ifdef_pass_level++;
+				ifdef_already_satisfied = true;
+			}
+			if (ifdef_fail_level == 1)
+				ifdef_already_satisfied = false;
 			continue;
 		}
 
 		if (tok == "`ifndef") {
 			skip_spaces();
 			std::string name = next_token(true);
-			if (ifdef_fail_level > 0 || defines.find(name))
+			if (ifdef_fail_level > 0 || defines.find(name)) {
 				ifdef_fail_level++;
+			} else {
+				ifdef_pass_level++;
+				ifdef_already_satisfied = true;
+			}
+			if (ifdef_fail_level == 1)
+				ifdef_already_satisfied = false;
 			continue;
 		}
 

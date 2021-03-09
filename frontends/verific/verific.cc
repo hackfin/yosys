@@ -21,6 +21,7 @@
 #include "kernel/sigtools.h"
 #include "kernel/celltypes.h"
 #include "kernel/log.h"
+#include "libs/sha1/sha1.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -48,14 +49,17 @@ USING_YOSYS_NAMESPACE
 #include "VeriWrite.h"
 #include "VhdlUnits.h"
 #include "VeriLibrary.h"
-#include "VeriExtensions.h"
 
-#ifndef SYMBIOTIC_VERIFIC_API_VERSION
-#  error "Only Symbiotic EDA flavored Verific is supported. Please contact office@symbioticeda.com for commercial support for Yosys+Verific."
+#if defined(YOSYSHQ_VERIFIC_INITSTATE) || defined(YOSYSHQ_VERIFIC_TEMPLATES) || defined(YOSYSHQ_VERIFIC_FORMALAPPS)
+#include "VeriExtensions.h"
 #endif
 
-#if SYMBIOTIC_VERIFIC_API_VERSION < 20200801
-#  error "Please update your version of Symbiotic EDA flavored Verific."
+#ifndef YOSYSHQ_VERIFIC_API_VERSION
+#  error "Only YosysHQ flavored Verific is supported. Please contact office@yosyshq.com for commercial support for Yosys+Verific."
+#endif
+
+#if YOSYSHQ_VERIFIC_API_VERSION < 20210103
+#  error "Please update your version of YosysHQ flavored Verific."
 #endif
 
 #ifdef __clang__
@@ -864,6 +868,21 @@ void VerificImporter::merge_past_ffs(pool<RTLIL::Cell*> &candidates)
 		merge_past_ffs_clock(it.second, it.first.first, it.first.second);
 }
 
+static std::string sha1_if_contain_spaces(std::string str)
+{
+	if(str.find_first_of(' ') != std::string::npos) {
+		std::size_t open = str.find_first_of('(');
+		std::size_t closed = str.find_last_of(')');
+		if (open != std::string::npos && closed != std::string::npos) {
+			std::string content = str.substr(open + 1, closed - open - 1);
+			return str.substr(0, open + 1) + sha1(content) + str.substr(closed);
+		} else {
+			return sha1(str);
+		}
+	}
+	return str;
+}
+
 void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::set<Netlist*> &nl_todo, bool norename)
 {
 	std::string netlist_name = nl->GetAtt(" \\top") ? nl->CellBaseName() : nl->Owner()->Name();
@@ -877,7 +896,7 @@ void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::se
 			module_name += nl->Name();
 			module_name += ")";
 		}
-		module_name = "\\" + module_name;
+		module_name = "\\" + sha1_if_contain_spaces(module_name);
 	}
 
 	netlist = nl;
@@ -1455,7 +1474,8 @@ void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::se
 				continue;
 		}
 
-		if (inst->Type() == PRIM_SEDA_INITSTATE)
+#ifdef YOSYSHQ_VERIFIC_INITSTATE
+		if (inst->Type() == PRIM_YOSYSHQ_INITSTATE)
 		{
 			SigBit initstate = module->Initstate(new_verific_id(inst));
 			SigBit sig_o = net_map_at(inst->GetOutput());
@@ -1464,7 +1484,7 @@ void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::se
 			if (!mode_keep)
 				continue;
 		}
-
+#endif
 		if (!mode_keep && verific_sva_prims.count(inst->Type())) {
 			if (verific_verbose)
 				log("    skipping SVA cell in non k-mode\n");
@@ -1512,7 +1532,7 @@ void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::se
 				inst_type += inst->View()->Name();
 				inst_type += ")";
 			}
-			inst_type = "\\" + inst_type;
+			inst_type = "\\" + sha1_if_contain_spaces(inst_type);
 		}
 
 		RTLIL::Cell *cell = module->addCell(inst_name, inst_type);
@@ -1942,9 +1962,10 @@ void verific_import(Design *design, const std::map<std::string,std::string> &par
 	for (const auto &i : parameters)
 		verific_params.Insert(i.first.c_str(), i.second.c_str());
 
+#ifdef YOSYSHQ_VERIFIC_INITSTATE
 	InitialAssertionRewriter rw;
 	rw.RegisterCallBack();
-
+#endif
 	if (top.empty()) {
 		netlists = hier_tree::ElaborateAll(&veri_libs, &vhdl_libs, &verific_params);
 	}
@@ -2183,9 +2204,12 @@ struct VerificPass : public Pass {
 		log("\n");
 		log("    verific -app <application>..\n");
 		log("\n");
-		log("Execute SEDA formal application on loaded Verilog files.\n");
+		log("Execute YosysHQ formal application on loaded Verilog files.\n");
 		log("\n");
 		log("Application options:\n");
+		log("\n");
+		log("    -module <module>\n");
+		log("        Run formal application only on specified module.\n");
 		log("\n");
 		log("    -blacklist <filename[:lineno]>\n");
 		log("        Do not run application on modules from files that match the filename\n");
@@ -2198,7 +2222,7 @@ struct VerificPass : public Pass {
 		log("\n");
 		log("Applications:\n");
 		log("\n");
-#ifdef YOSYS_ENABLE_VERIFIC
+#if defined(YOSYS_ENABLE_VERIFIC) && defined(YOSYSHQ_VERIFIC_FORMALAPPS)
 		VerificFormalApplications vfa;
 		log("%s\n",vfa.GetHelp().c_str());
 #else
@@ -2224,18 +2248,18 @@ struct VerificPass : public Pass {
 		log("\n");
 		log("Templates:\n");
 		log("\n");
-#ifdef YOSYS_ENABLE_VERIFIC
+#if defined(YOSYS_ENABLE_VERIFIC) && defined(YOSYSHQ_VERIFIC_TEMPLATES)
 		VerificTemplateGenerator vfg;
 		log("%s\n",vfg.GetHelp().c_str());
 #else
 		log("  WARNING: Templates only available in commercial build.\n");
 		log("\n");
 #endif
-		log("Use Symbiotic EDA Suite if you need Yosys+Verifc.\n");
-		log("https://www.symbioticeda.com/seda-suite\n");
+		log("Use YosysHQ Tabby CAD Suite if you need Yosys+Verific.\n");
+		log("https://www.yosyshq.com/\n");
 		log("\n");
-		log("Contact office@symbioticeda.com for free evaluation\n");
-		log("binaries of Symbiotic EDA Suite.\n");
+		log("Contact office@yosyshq.com for free evaluation\n");
+		log("binaries of YosysHQ Tabby CAD Suite.\n");
 		log("\n");
 	}
 #ifdef YOSYS_ENABLE_VERIFIC
@@ -2246,11 +2270,11 @@ struct VerificPass : public Pass {
 		if (check_noverific_env())
 			log_cmd_error("This version of Yosys is built without Verific support.\n"
 					"\n"
-					"Use Symbiotic EDA Suite if you need Yosys+Verifc.\n"
-					"https://www.symbioticeda.com/seda-suite\n"
+					"Use YosysHQ Tabby CAD Suite if you need Yosys+Verific.\n"
+					"https://www.yosyshq.com/\n"
 					"\n"
-					"Contact office@symbioticeda.com for free evaluation\n"
-					"binaries of Symbiotic EDA Suite.\n");
+					"Contact office@yosyshq.com for free evaluation\n"
+					"binaries of YosysHQ Tabby CAD Suite.\n");
 
 		log_header(design, "Executing VERIFIC (loading SystemVerilog and VHDL designs using Verific).\n");
 
@@ -2475,8 +2499,12 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
-		if (argidx+1 < GetSize(args) && args[argidx] == "-app")
+#ifdef YOSYSHQ_VERIFIC_FORMALAPPS
+		if (argidx < GetSize(args) && args[argidx] == "-app")
 		{
+			if (!(argidx+1 < GetSize(args)))
+				cmd_error(args, argidx, "No formal application specified.\n");
+
 			VerificFormalApplications vfa;
 			auto apps = vfa.GetApps();
 			std::string app = args[++argidx];
@@ -2484,15 +2512,42 @@ struct VerificPass : public Pass {
 			if (apps.find(app) == apps.end())
 				log_cmd_error("Application '%s' does not exist.\n", app.c_str());
 
+			FormalApplication *application = apps[app];
+			application->setLogger([](std::string msg) { log("%s",msg.c_str()); } );
+			VeriModule *selected_module = nullptr;
+
 			for (argidx++; argidx < GetSize(args); argidx++) {
-				if (args[argidx] == "-blacklist" && argidx+1 < GetSize(args)) {
+				std::string error;
+				if (application->checkParams(args, argidx, error)) {
+					if (!error.empty())
+						cmd_error(args, argidx, error);
+					continue;
+				}
+
+				if (args[argidx] == "-module" && argidx < GetSize(args)) {
+					if (!(argidx+1 < GetSize(args)))
+						cmd_error(args, argidx+1, "No module name specified.\n");
+					std::string module = args[++argidx];
+					VeriLibrary* veri_lib = veri_file::GetLibrary(work.c_str(), 1);
+					selected_module = veri_lib ? veri_lib->GetModule(module.c_str(), 1) : nullptr;
+					if (!selected_module) {
+						log_error("Can't find module '%s'.\n", module.c_str());
+					}
+					continue;
+				}
+				if (args[argidx] == "-blacklist" && argidx < GetSize(args)) {
+					if (!(argidx+1 < GetSize(args)))
+						cmd_error(args, argidx+1, "No blacklist specified.\n");
+
 					std::string line = args[++argidx];
 					std::string p;
 					while (!(p = next_token(line, ",\t\r\n ")).empty())
 						blacklists.push_back(p);
 					continue;
 				}
-				if (args[argidx] == "-blfile" && argidx+1 < GetSize(args)) {
+				if (args[argidx] == "-blfile" && argidx < GetSize(args)) {
+					if (!(argidx+1 < GetSize(args)))
+						cmd_error(args, argidx+1, "No blacklist file specified.\n");
 					std::string fn = args[++argidx];
 					std::ifstream f(fn);
 					if (f.fail())
@@ -2509,16 +2564,36 @@ struct VerificPass : public Pass {
 			}
 			if (argidx < GetSize(args))
 				cmd_error(args, argidx, "unknown option/parameter");
+
+			application->setBlacklists(&blacklists);
+			application->setSingleModuleMode(selected_module!=nullptr);
+
+			const char *err = application->validate();
+			if (err)
+				cmd_error(args, argidx, err);
+
 			MapIter mi;
-			VeriModule *module ;
 			VeriLibrary *veri_lib = veri_file::GetLibrary(work.c_str(), 1);
 			log("Running formal application '%s'.\n", app.c_str());
-			FOREACH_VERILOG_MODULE_IN_LIBRARY(veri_lib, mi, module) {
-				vfa.Run(module,apps[app],blacklists);
+
+			if (selected_module) {
+				std::string out;
+				if (!application->execute(selected_module, out))
+					log_error("%s", out.c_str());
+			}
+			else {
+				VeriModule *module ;
+				FOREACH_VERILOG_MODULE_IN_LIBRARY(veri_lib, mi, module) {
+					std::string out;
+					if (!application->execute(module, out)) {
+						log_error("%s", out.c_str());
+						break;
+					}
+				}
 			}
 			goto check_error;
 		}
-
+#endif
 		if (argidx < GetSize(args) && args[argidx] == "-pp")
 		{
 			const char* filename = nullptr;
@@ -2561,10 +2636,11 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
+#ifdef YOSYSHQ_VERIFIC_TEMPLATES
 		if (argidx < GetSize(args) && args[argidx] == "-template")
 		{
-			if (!(argidx < GetSize(args)))
-				cmd_error(args, argidx, "No template type specified.\n");
+			if (!(argidx+1 < GetSize(args)))
+				cmd_error(args, argidx+1, "No template type specified.\n");
 
 			VerificTemplateGenerator vfg;
 			auto gens = vfg.GetGenerators();
@@ -2572,8 +2648,9 @@ struct VerificPass : public Pass {
 			if (gens.find(app) == gens.end())
 				log_cmd_error("Template generator '%s' does not exist.\n", app.c_str());
 			TemplateGenerator *generator = gens[app];
-			if (!(argidx < GetSize(args)))
-				cmd_error(args, argidx, "No top module specified.\n");
+			if (!(argidx+1 < GetSize(args)))
+				cmd_error(args, argidx+1, "No top module specified.\n");
+			generator->setLogger([](std::string msg) { log("%s",msg.c_str()); } );
 			
 			std::string module = args[++argidx];
 			VeriLibrary* veri_lib = veri_file::GetLibrary(work.c_str(), 1);
@@ -2588,9 +2665,19 @@ struct VerificPass : public Pass {
 			const char *out_filename = nullptr;
 
 			for (argidx++; argidx < GetSize(args); argidx++) {
-				if (generator->checkParams(args, argidx))
+				std::string error;
+				if (generator->checkParams(args, argidx, error)) {
+					if (!error.empty())
+						cmd_error(args, argidx, error);
 					continue;
-				if (args[argidx] == "-chparam"  && argidx+2 < GetSize(args)) {
+				}
+
+				if (args[argidx] == "-chparam"  && argidx < GetSize(args)) {
+					if (!(argidx+1 < GetSize(args)))
+						cmd_error(args, argidx+1, "No param name specified.\n");
+					if (!(argidx+2 < GetSize(args)))
+						cmd_error(args, argidx+2, "No param value specified.\n");
+
 					const std::string &key = args[++argidx];
 					const std::string &value = args[++argidx];
 					unsigned new_insertion = parameters.Insert(key.c_str(), value.c_str(),
@@ -2600,7 +2687,9 @@ struct VerificPass : public Pass {
 					continue;
 				}
 
-				if (args[argidx] == "-out" && argidx+1 < GetSize(args)) {
+				if (args[argidx] == "-out" && argidx < GetSize(args)) {
+					if (!(argidx+1 < GetSize(args)))
+						cmd_error(args, argidx+1, "No output file specified.\n");
 					out_filename = args[++argidx].c_str();
 					continue;
 				}
@@ -2614,7 +2703,9 @@ struct VerificPass : public Pass {
 			if (err)
 				cmd_error(args, argidx, err);
 
-			std::string val = generator->generate(veri_module, &parameters);
+			std::string val;
+			if (!generator->generate(veri_module, val, &parameters))
+				log_error("%s", val.c_str());
 
 			FILE *of = stdout;
 			if (out_filename) {
@@ -2629,7 +2720,7 @@ struct VerificPass : public Pass {
 				fclose(of);
 			goto check_error;
 		}
-
+#endif
 		if (GetSize(args) > argidx && args[argidx] == "-import")
 		{
 			std::set<Netlist*> nl_todo, nl_done;
@@ -2714,9 +2805,10 @@ struct VerificPass : public Pass {
 
 			std::set<std::string> top_mod_names;
 
+#ifdef YOSYSHQ_VERIFIC_INITSTATE
 			InitialAssertionRewriter rw;
 			rw.RegisterCallBack();
-
+#endif
 			if (mode_all)
 			{
 				log("Running hier_tree::ElaborateAll().\n");
@@ -2842,11 +2934,11 @@ struct VerificPass : public Pass {
 	void execute(std::vector<std::string>, RTLIL::Design *) override {
 		log_cmd_error("This version of Yosys is built without Verific support.\n"
 				"\n"
-				"Use Symbiotic EDA Suite if you need Yosys+Verifc.\n"
-				"https://www.symbioticeda.com/seda-suite\n"
+				"Use YosysHQ Tabby CAD Suite if you need Yosys+Verific.\n"
+				"https://www.yosyshq.com/\n"
 				"\n"
-				"Contact office@symbioticeda.com for free evaluation\n"
-				"binaries of Symbiotic EDA Suite.\n");
+				"Contact office@yosyshq.com for free evaluation\n"
+				"binaries of YosysHQ Tabby CAD Suite.\n");
 	}
 #endif
 } VerificPass;

@@ -253,6 +253,7 @@ static void rewriteAsMemoryNode(AstNode *node, AstNode *rangeNode)
 	struct specify_rise_fall *specify_rise_fall_ptr;
 	bool boolean;
 	char ch;
+	int integer;
 }
 
 %token <string> TOK_STRING TOK_ID TOK_CONSTVAL TOK_REALVAL TOK_PRIMITIVE
@@ -277,16 +278,18 @@ static void rewriteAsMemoryNode(AstNode *node, AstNode *rangeNode)
 %token TOK_SUPPLY0 TOK_SUPPLY1 TOK_TO_SIGNED TOK_TO_UNSIGNED
 %token TOK_POS_INDEXED TOK_NEG_INDEXED TOK_PROPERTY TOK_ENUM TOK_TYPEDEF
 %token TOK_RAND TOK_CONST TOK_CHECKER TOK_ENDCHECKER TOK_EVENTUALLY
-%token TOK_INCREMENT TOK_DECREMENT TOK_UNIQUE TOK_PRIORITY
-%token TOK_STRUCT TOK_PACKED TOK_UNSIGNED TOK_INT TOK_BYTE TOK_SHORTINT TOK_UNION
+%token TOK_INCREMENT TOK_DECREMENT TOK_UNIQUE TOK_UNIQUE0 TOK_PRIORITY
+%token TOK_STRUCT TOK_PACKED TOK_UNSIGNED TOK_INT TOK_BYTE TOK_SHORTINT TOK_LONGINT TOK_UNION
 %token TOK_OR_ASSIGN TOK_XOR_ASSIGN TOK_AND_ASSIGN TOK_SUB_ASSIGN
 
-%type <ast> range range_or_multirange  non_opt_range non_opt_multirange range_or_signed_int
-%type <ast> wire_type expr basic_expr concat_list rvalue lvalue lvalue_concat_list
+%type <ast> range range_or_multirange non_opt_range non_opt_multirange
+%type <ast> wire_type expr basic_expr concat_list rvalue lvalue lvalue_concat_list non_io_wire_type io_wire_type
 %type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id hierarchical_type_id integral_number
 %type <string> type_name
-%type <ast> opt_enum_init enum_type struct_type non_wire_data_type
-%type <boolean> opt_signed opt_property unique_case_attr always_comb_or_latch always_or_always_ff
+%type <ast> opt_enum_init enum_type struct_type non_wire_data_type func_return_type
+%type <boolean> opt_property always_comb_or_latch always_or_always_ff
+%type <boolean> opt_signedness_default_signed opt_signedness_default_unsigned
+%type <integer> integer_atom_type
 %type <al> attr case_attr
 %type <ast> struct_union
 
@@ -543,8 +546,9 @@ module_arg:
 		node->str = *$4;
 		SET_AST_NODE_LOC(node, @4, @4);
 		node->port_id = ++port_counter;
-		if ($3 != NULL)
-			node->children.push_back($3);
+		AstNode *range = checkRange(node, $3);
+		if (range != NULL)
+			node->children.push_back(range);
 		if (!node->is_input && !node->is_output)
 			frontend_verilog_yyerror("Module port `%s' is neither input nor output.", $4->c_str());
 		if (node->is_reg && node->is_input && !node->is_output && !sv_mode)
@@ -609,36 +613,34 @@ interface_body_stmt:
 	param_decl | localparam_decl | typedef_decl | defparam_decl | wire_decl | always_stmt | assign_stmt |
 	modport_stmt;
 
+mintypmax_expr:
+	expr { delete $1; } |
+	expr ':' expr ':' expr { delete $1; delete $3; delete $5; };
+
 non_opt_delay:
 	'#' TOK_ID { delete $2; } |
 	'#' TOK_CONSTVAL { delete $2; } |
 	'#' TOK_REALVAL { delete $2; } |
-	'#' '(' expr ')' { delete $3; } |
-	'#' '(' expr ':' expr ':' expr ')' { delete $3; delete $5; delete $7; };
+	'#' '(' mintypmax_expr ')' |
+	'#' '(' mintypmax_expr ',' mintypmax_expr ')' |
+	'#' '(' mintypmax_expr ',' mintypmax_expr ',' mintypmax_expr ')';
 
 delay:
 	non_opt_delay | %empty;
 
-wire_type:
-	{
-		astbuf3 = new AstNode(AST_WIRE);
-		current_wire_rand = false;
-		current_wire_const = false;
-	} wire_type_token_list {
-		$$ = astbuf3;
-		SET_RULE_LOC(@$, @2, @$);
-	};
+io_wire_type:
+	{ astbuf3 = new AstNode(AST_WIRE); current_wire_rand = false; current_wire_const = false; }
+	wire_type_token_io wire_type_const_rand opt_wire_type_token wire_type_signedness
+	{ $$ = astbuf3; SET_RULE_LOC(@$, @2, @$); };
 
-wire_type_token_list:
-	wire_type_token |
-	wire_type_token_list wire_type_token |
-	wire_type_token_io |
-	hierarchical_type_id {
-		astbuf3->is_custom_type = true;
-		astbuf3->children.push_back(new AstNode(AST_WIRETYPE));
-		astbuf3->children.back()->str = *$1;
-		delete $1;
-	};
+non_io_wire_type:
+	{ astbuf3 = new AstNode(AST_WIRE); current_wire_rand = false; current_wire_const = false; }
+	wire_type_const_rand wire_type_token wire_type_signedness
+	{ $$ = astbuf3; SET_RULE_LOC(@$, @2, @$); };
+
+wire_type:
+	io_wire_type  |
+	non_io_wire_type;
 
 wire_type_token_io:
 	TOK_INPUT {
@@ -652,8 +654,32 @@ wire_type_token_io:
 		astbuf3->is_output = true;
 	};
 
+wire_type_signedness:
+	TOK_SIGNED   { astbuf3->is_signed = true;  } |
+	TOK_UNSIGNED { astbuf3->is_signed = false; } |
+	%empty;
+
+wire_type_const_rand:
+	TOK_RAND TOK_CONST {
+	    current_wire_rand = true;
+	    current_wire_const = true;
+	} |
+	TOK_CONST {
+	    current_wire_const = true;
+	} |
+	TOK_RAND {
+	    current_wire_rand = true;
+	} |
+	%empty;
+
+opt_wire_type_token:
+	wire_type_token | %empty;
+
 wire_type_token:
-	TOK_WIRE {
+	hierarchical_type_id {
+		astbuf3->is_custom_type = true;
+		astbuf3->children.push_back(new AstNode(AST_WIRETYPE));
+		astbuf3->children.back()->str = *$1;
 	} |
 	TOK_WOR {
 		astbuf3->is_wor = true;
@@ -661,20 +687,27 @@ wire_type_token:
 	TOK_WAND {
 		astbuf3->is_wand = true;
 	} |
+	// wires
+	TOK_WIRE {
+	} |
+	TOK_WIRE logic_type {
+	} |
+	// regs
 	TOK_REG {
 		astbuf3->is_reg = true;
 	} |
-	TOK_LOGIC {
-		astbuf3->is_logic = true;
+	TOK_VAR TOK_REG {
+		astbuf3->is_reg = true;
 	} |
+	// logics
 	TOK_VAR {
 		astbuf3->is_logic = true;
 	} |
-	TOK_INTEGER {
-		astbuf3->is_reg = true;
-		astbuf3->range_left = 31;
-		astbuf3->range_right = 0;
-		astbuf3->is_signed = true;
+	TOK_VAR logic_type {
+		astbuf3->is_logic = true;
+	} |
+	logic_type {
+		astbuf3->is_logic = true;
 	} |
 	TOK_GENVAR {
 		astbuf3->type = AST_GENVAR;
@@ -682,16 +715,23 @@ wire_type_token:
 		astbuf3->is_signed = true;
 		astbuf3->range_left = 31;
 		astbuf3->range_right = 0;
-	} |
-	TOK_SIGNED {
-		astbuf3->is_signed = true;
-	} |
-	TOK_RAND {
-		current_wire_rand = true;
-	} |
-	TOK_CONST {
-		current_wire_const = true;
 	};
+
+logic_type:
+	TOK_LOGIC {
+	} |
+	integer_atom_type {
+		astbuf3->range_left = $1 - 1;
+		astbuf3->range_right = 0;
+		astbuf3->is_signed = true;
+	};
+
+integer_atom_type:
+	TOK_INTEGER	{ $$ = 32; } |
+	TOK_INT		{ $$ = 32; } |
+	TOK_SHORTINT	{ $$ = 16; } |
+	TOK_LONGINT	{ $$ = 64; } |
+	TOK_BYTE	{ $$ =  8; } ;
 
 non_opt_range:
 	'[' expr ':' expr ']' {
@@ -737,15 +777,11 @@ range_or_multirange:
 	range { $$ = $1; } |
 	non_opt_multirange { $$ = $1; };
 
-range_or_signed_int:
-	  range 		{ $$ = $1; }
-	| TOK_INTEGER		{ $$ = makeRange(); }
-	;
-
 module_body:
 	module_body module_body_stmt |
 	/* the following line makes the generate..endgenrate keywords optional */
 	module_body gen_stmt |
+	module_body gen_block |
 	module_body ';' |
 	%empty;
 
@@ -811,28 +847,57 @@ task_func_decl:
 		current_function_or_task = NULL;
 		ast_stack.pop_back();
 	} |
-	attr TOK_FUNCTION opt_automatic opt_signed range_or_signed_int TOK_ID {
+	attr TOK_FUNCTION opt_automatic func_return_type TOK_ID {
 		current_function_or_task = new AstNode(AST_FUNCTION);
-		current_function_or_task->str = *$6;
+		current_function_or_task->str = *$5;
 		append_attr(current_function_or_task, $1);
 		ast_stack.back()->children.push_back(current_function_or_task);
 		ast_stack.push_back(current_function_or_task);
 		AstNode *outreg = new AstNode(AST_WIRE);
-		outreg->str = *$6;
-		outreg->is_signed = $4;
+		outreg->str = *$5;
+		outreg->is_signed = false;
 		outreg->is_reg = true;
-		if ($5 != NULL) {
-			outreg->children.push_back($5);
-			outreg->is_signed = $4 || $5->is_signed;
-			$5->is_signed = false;
+		if ($4 != NULL) {
+			outreg->children.push_back($4);
+			outreg->is_signed = $4->is_signed;
+			$4->is_signed = false;
 		}
 		current_function_or_task->children.push_back(outreg);
 		current_function_or_task_port_id = 1;
-		delete $6;
+		delete $5;
 	} task_func_args_opt ';' task_func_body TOK_ENDFUNCTION {
 		current_function_or_task = NULL;
 		ast_stack.pop_back();
 	};
+
+func_return_type:
+	opt_type_vec opt_signedness_default_unsigned {
+		$$ = makeRange(0, 0, $2);
+	} |
+	opt_type_vec opt_signedness_default_unsigned non_opt_range {
+		$$ = $3;
+		$$->is_signed = $2;
+	} |
+	integer_atom_type opt_signedness_default_signed {
+		$$ = makeRange($1 - 1, 0, $2);
+	};
+
+opt_type_vec:
+	  %empty
+	| TOK_REG
+	| TOK_LOGIC
+	;
+
+opt_signedness_default_signed:
+	  %empty	{ $$ = true; }
+	| TOK_SIGNED	{ $$ = true; }
+	| TOK_UNSIGNED	{ $$ = false; }
+	;
+opt_signedness_default_unsigned:
+	  %empty	{ $$ = false; }
+	| TOK_SIGNED	{ $$ = true; }
+	| TOK_UNSIGNED	{ $$ = false; }
+	;
 
 dpi_function_arg:
 	TOK_ID TOK_ID {
@@ -859,14 +924,6 @@ opt_automatic:
 	TOK_AUTOMATIC |
 	%empty;
 
-opt_signed:
-	TOK_SIGNED {
-		$$ = true;
-	} |
-	%empty {
-		$$ = false;
-	};
-
 task_func_args_opt:
 	'(' ')' | %empty | '(' {
 		albuf = nullptr;
@@ -884,7 +941,11 @@ task_func_args:
 
 task_func_port:
 	attr wire_type range {
+		bool prev_was_input = true;
+		bool prev_was_output = false;
 		if (albuf) {
+			prev_was_input = astbuf1->is_input;
+			prev_was_output = astbuf1->is_output;
 			delete astbuf1;
 			if (astbuf2 != NULL)
 				delete astbuf2;
@@ -893,6 +954,12 @@ task_func_port:
 		albuf = $1;
 		astbuf1 = $2;
 		astbuf2 = checkRange(astbuf1, $3);
+		if (!astbuf1->is_input && !astbuf1->is_output) {
+			if (!sv_mode)
+				frontend_verilog_yyerror("task/function argument direction missing");
+			astbuf1->is_input = prev_was_input;
+			astbuf1->is_output = prev_was_output;
+		}
 	} wire_name |
 	{
 		if (!astbuf1) {
@@ -1339,11 +1406,8 @@ param_signed:
 	} | %empty;
 
 param_integer:
-	TOK_INTEGER {
-		astbuf1->children.push_back(new AstNode(AST_RANGE));
-		astbuf1->children.back()->children.push_back(AstNode::mkconst_int(31, true));
-		astbuf1->children.back()->children.push_back(AstNode::mkconst_int(0, true));
-		astbuf1->is_signed = true;
+	type_atom {
+		astbuf1->is_reg = false;
 	};
 
 param_real:
@@ -1359,7 +1423,13 @@ param_range:
 	};
 
 param_integer_type: param_integer param_signed;
-param_range_type: type_vec param_signed param_range;
+param_range_type:
+	type_vec param_signed {
+		addRange(astbuf1, 0, 0);
+	} |
+	type_vec param_signed non_opt_range {
+		astbuf1->children.push_back($3);
+	};
 param_implicit_type: param_signed param_range;
 
 param_type:
@@ -1392,7 +1462,26 @@ param_decl_list:
 	single_param_decl | param_decl_list ',' single_param_decl;
 
 single_param_decl:
-	TOK_ID '=' expr {
+	single_param_decl_ident '=' expr {
+		AstNode *decl = ast_stack.back()->children.back();
+		log_assert(decl->type == AST_PARAMETER || decl->type == AST_LOCALPARAM);
+		delete decl->children[0];
+		decl->children[0] = $3;
+	} |
+	single_param_decl_ident {
+		AstNode *decl = ast_stack.back()->children.back();
+		if (decl->type != AST_PARAMETER) {
+			log_assert(decl->type == AST_LOCALPARAM);
+			frontend_verilog_yyerror("localparam initialization is missing!");
+		}
+		if (!sv_mode)
+			frontend_verilog_yyerror("Parameter defaults can only be omitted in SystemVerilog mode!");
+		delete decl->children[0];
+		decl->children.erase(decl->children.begin());
+	};
+
+single_param_decl_ident:
+	TOK_ID {
 		AstNode *node;
 		if (astbuf1 == nullptr) {
 			if (!sv_mode)
@@ -1403,10 +1492,9 @@ single_param_decl:
 			node = astbuf1->clone();
 		}
 		node->str = *$1;
-		delete node->children[0];
-		node->children[0] = $3;
 		ast_stack.back()->children.push_back(node);
 		delete $1;
+		SET_AST_NODE_LOC(node, @1, @1);
 	};
 
 defparam_decl:
@@ -1456,11 +1544,12 @@ enum_base_type: type_atom type_signing
 	| %empty			{ astbuf1->is_reg = true; addRange(astbuf1); }
 	;
 
-type_atom: TOK_INTEGER		{ astbuf1->is_reg = true; addRange(astbuf1); }		// 4-state signed
-	|  TOK_INT		{ astbuf1->is_reg = true; addRange(astbuf1); }		// 2-state signed
-	|  TOK_SHORTINT		{ astbuf1->is_reg = true; addRange(astbuf1, 15, 0); }	// 2-state signed
-	|  TOK_BYTE		{ astbuf1->is_reg = true; addRange(astbuf1,  7, 0); }	// 2-state signed
-	;
+type_atom:
+	integer_atom_type {
+		astbuf1->is_reg = true;
+		astbuf1->is_signed = true;
+		addRange(astbuf1, $1 - 1, 0);
+	};
 
 type_vec: TOK_REG		{ astbuf1->is_reg   = true; }		// unsigned
 	| TOK_LOGIC		{ astbuf1->is_logic = true; }		// unsigned
@@ -1749,7 +1838,13 @@ wire_name:
 			}
 			rewriteAsMemoryNode(node, $2);
 		}
-		if (current_function_or_task == NULL) {
+		if (current_function_or_task) {
+			if (node->is_input || node->is_output)
+				node->port_id = current_function_or_task_port_id++;
+		} else if (ast_stack.back()->type == AST_GENBLOCK) {
+			if (node->is_input || node->is_output)
+				frontend_verilog_yyerror("Cannot declare module port `%s' within a generate block.", $1->c_str());
+		} else {
 			if (do_not_require_port_stubs && (node->is_input || node->is_output) && port_stubs.count(*$1) == 0) {
 				port_stubs[*$1] = ++port_counter;
 			}
@@ -1764,9 +1859,6 @@ wire_name:
 				if (node->is_input || node->is_output)
 					frontend_verilog_yyerror("Module port `%s' is not declared in module header.", $1->c_str());
 			}
-		} else {
-			if (node->is_input || node->is_output)
-				node->port_id = current_function_or_task_port_id++;
 		}
 		//FIXME: for some reason, TOK_ID has a location which always points to one column *after* the real last column...
 		SET_AST_NODE_LOC(node, @1, @1);
@@ -1793,7 +1885,7 @@ type_name: TOK_ID		// first time seen
 	 ;
 
 typedef_decl:
-	TOK_TYPEDEF wire_type range type_name range_or_multirange ';' {
+	TOK_TYPEDEF non_io_wire_type range type_name range_or_multirange ';' {
 		astbuf1 = $2;
 		astbuf2 = checkRange(astbuf1, $3);
 		if (astbuf2)
@@ -1890,6 +1982,9 @@ cell_parameter:
 		AstNode *node = new AstNode(AST_PARASET);
 		astbuf1->children.push_back(node);
 		node->children.push_back($1);
+	} |
+	'.' TOK_ID '(' ')' {
+		// just ignore empty parameters
 	} |
 	'.' TOK_ID '(' expr ')' {
 		AstNode *node = new AstNode(AST_PARASET);
@@ -2422,6 +2517,16 @@ behavioral_stmt:
 		exitTypeScope();
 		if ($4 != NULL && $8 != NULL && *$4 != *$8)
 			frontend_verilog_yyerror("Begin label (%s) and end label (%s) don't match.", $4->c_str()+1, $8->c_str()+1);
+		AstNode *node = ast_stack.back();
+		// In SystemVerilog, unnamed blocks with block item declarations
+		// create an implicit hierarchy scope
+		if (sv_mode && node->str.empty())
+		    for (const AstNode* child : node->children)
+			if (child->type == AST_WIRE || child->type == AST_MEMORY || child->type == AST_PARAMETER
+				|| child->type == AST_LOCALPARAM || child->type == AST_TYPEDEF) {
+			    node->str = "$unnamed_block$" + std::to_string(autoidx++);
+			    break;
+			}
 		SET_AST_NODE_LOC(ast_stack.back(), @2, @8);
 		delete $4;
 		delete $8;
@@ -2436,6 +2541,7 @@ behavioral_stmt:
 		ast_stack.back()->children.push_back($7);
 	} ';' simple_behavioral_stmt ')' {
 		AstNode *block = new AstNode(AST_BLOCK);
+		block->str = "$for_loop$" + std::to_string(autoidx++);
 		ast_stack.back()->children.push_back(block);
 		ast_stack.push_back(block);
 	} behavioral_stmt {
@@ -2502,20 +2608,21 @@ behavioral_stmt:
 		ast_stack.pop_back();
 	};
 
-unique_case_attr:
-	%empty {
-		$$ = false;
-	} |
-	TOK_PRIORITY case_attr {
-		$$ = $2;
-	} |
-	TOK_UNIQUE case_attr {
-		$$ = true;
-	};
-
 case_attr:
-	attr unique_case_attr {
-		if ($2) (*$1)[ID::parallel_case] = AstNode::mkconst_int(1, false);
+	attr {
+		$$ = $1;
+	} |
+	attr TOK_UNIQUE0 {
+		(*$1)[ID::parallel_case] = AstNode::mkconst_int(1, false);
+		$$ = $1;
+	} |
+	attr TOK_PRIORITY {
+		(*$1)[ID::full_case] = AstNode::mkconst_int(1, false);
+		$$ = $1;
+	} |
+	attr TOK_UNIQUE {
+		(*$1)[ID::full_case] = AstNode::mkconst_int(1, false);
+		(*$1)[ID::parallel_case] = AstNode::mkconst_int(1, false);
 		$$ = $1;
 	};
 
@@ -2685,6 +2792,7 @@ single_arg:
 
 module_gen_body:
 	module_gen_body gen_stmt_or_module_body_stmt |
+	module_gen_body gen_block |
 	%empty;
 
 gen_stmt_or_module_body_stmt:
@@ -2710,12 +2818,7 @@ gen_stmt:
 		ast_stack.back()->children.push_back(node);
 		ast_stack.push_back(node);
 		ast_stack.back()->children.push_back($3);
-		AstNode *block = new AstNode(AST_GENBLOCK);
-		ast_stack.back()->children.push_back(block);
-		ast_stack.push_back(block);
-	} gen_stmt_block {
-		ast_stack.pop_back();
-	} opt_gen_else {
+	} gen_stmt_block opt_gen_else {
 		SET_AST_NODE_LOC(ast_stack.back(), @1, @7);
 		ast_stack.pop_back();
 	} |
@@ -2725,20 +2828,6 @@ gen_stmt:
 		ast_stack.push_back(node);
 	} gen_case_body TOK_ENDCASE {
 		case_type_stack.pop_back();
-		SET_AST_NODE_LOC(ast_stack.back(), @1, @7);
-		ast_stack.pop_back();
-	} |
-	TOK_BEGIN {
-		enterTypeScope();
-	} opt_label {
-		AstNode *node = new AstNode(AST_GENBLOCK);
-		node->str = $3 ? *$3 : std::string();
-		ast_stack.back()->children.push_back(node);
-		ast_stack.push_back(node);
-	} module_gen_body TOK_END opt_label {
-		exitTypeScope();
-		delete $3;
-		delete $7;
 		SET_AST_NODE_LOC(ast_stack.back(), @1, @7);
 		ast_stack.pop_back();
 	} |
@@ -2753,6 +2842,25 @@ gen_stmt:
 		ast_stack.pop_back();
 	};
 
+gen_block:
+	TOK_BEGIN {
+		enterTypeScope();
+	} opt_label {
+		AstNode *node = new AstNode(AST_GENBLOCK);
+		node->str = $3 ? *$3 : std::string();
+		ast_stack.back()->children.push_back(node);
+		ast_stack.push_back(node);
+	} module_gen_body TOK_END opt_label {
+		exitTypeScope();
+		if ($3 != NULL && $7 != NULL && *$3 != *$7)
+			frontend_verilog_yyerror("Begin label (%s) and end label (%s) don't match.", $3->c_str()+1, $7->c_str()+1);
+		delete $3;
+		delete $7;
+		SET_AST_NODE_LOC(ast_stack.back(), @1, @7);
+		ast_stack.pop_back();
+	};
+
+// result is wrapped in a genblock only if necessary
 gen_stmt_block:
 	{
 		AstNode *node = new AstNode(AST_GENBLOCK);
@@ -2761,7 +2869,7 @@ gen_stmt_block:
 	} gen_stmt_or_module_body_stmt {
 		SET_AST_NODE_LOC(ast_stack.back(), @2, @2);
 		ast_stack.pop_back();
-	};
+	} | gen_block;
 
 opt_gen_else:
 	TOK_ELSE gen_stmt_block | %empty %prec FAKE_THEN;
